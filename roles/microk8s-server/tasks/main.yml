@@ -1,0 +1,27 @@
+---
+# tasks file for microk8s-server role
+
+# INSTALL MICROK8S
+- import_tasks: install-microk8s.yml
+
+# CONFIGURE USERS IF USERS IS DEFINED
+- name: configure microk8s users
+  include_tasks: configure-users.yml
+  when: "users is defined and users not in ([],None,'', omit)"
+
+# CONFIGURE ADDONS - SINGLE NODE / NON-HIGH AVAILABILITY
+- name: configure microk8s addons
+  include_tasks: enable-addons.yml
+  when: not microk8s_enable_ha
+
+# CONFIGURE HIGH AVAILABILITY
+- name: configure microk8s high availability cluster
+  include_tasks: enable-ha.yml
+  when: microk8s_enable_ha
+
+# CONFIGURE WORKERS
+- name: configure microk8s workers
+  include_tasks: configure-workers.yml
+  when: 
+    - "groups[microk8s_host_workers_group]|length>0" # WORKERS ARE DEFINED
+    - groups[microk8s_host_ha_group]|length>0 or groups[microk8s_host_primary_group]|length>0 # HA GROUP IS POPULATED OR PRIMARY NODE ASSIGNED

@@ -1,0 +1,67 @@
+- name: The HA inventory group has members defined and the primary node group is empty.
+  assert:
+    that:
+      - groups[microk8s_host_ha_group]|length > 0
+      - groups[microk8s_host_primary_group]|length == 0
+  when: microk8s_enable_ha
+
+- name: Select primary cluster member (HA enabled)
+  set_fact:
+    primary_cluster_member: '{{ (groups[microk8s_host_ha_group]|sort)[0] }}'
+  when: microk8s_enable_ha
+
+- name: A primary node is specified in inventory and the HA group is also empty.
+  assert:
+    that:
+      - groups[microk8s_host_primary_group]|length > 0
+      - groups[microk8s_host_ha_group]|length == 0
+  when: not microk8s_enable_ha
+
+- name: Select primary cluster member (HA disabled - primary node specified)
+  set_fact:
+    primary_cluster_member: '{{ (groups[microk8s_host_primary_group])[0] }}'
+  when: not microk8s_enable_ha
+
+- name: Generate join command and join cluster
+  block:
+  - name: Ensure MicroK8s is ready on primary cluster host
+    command: "microk8s status --wait-ready"
+    delegate_to: "{{ primary_cluster_member }}"
+    delegate_facts: true
+    changed_when: false
+
+  - name: Generate MicroK8s join command from primary cluster host
+    shell: "microk8s add-node | grep -E -m1 'microk8s join {{ microk8s_ha_ip_regex }}'"
+    delegate_to: "{{ primary_cluster_member }}"
+    delegate_facts: true
+    changed_when: false
+    register: microk8s_join_command
+
+  - name: Get existing MicroK8s cluster nodes
+    command: "microk8s kubectl get node"
+    delegate_to: "{{ primary_cluster_member }}"
+    delegate_facts: true
+    changed_when: false
+    register: microk8s_cluster_node
+
+  - name: Ensure MicroK8s is ready on worker node
+    command: "microk8s status --wait-ready"
+    changed_when: false
+    register: status_command_output
+    failed_when:
+      - "'This MicroK8s deployment is acting as a node in a cluster.' not in status_command_output.stdout_lines"
+      - status_command_output.rc > 0
+
+  - name: Run MicroK8s join command on worker node
+    command: "{{ microk8s_join_command.stdout }}"
+    when: microk8s_cluster_node.stdout.find(inventory_hostname) == -1
+    register: join_command_output
+    failed_when:
+      - "'already known to dqlite' not in join_command_output.stdout"
+      - join_command_output.rc > 0
+
+  become: yes
+  when:
+    - primary_cluster_member != ""
+    - inventory_hostname != primary_cluster_member
+    - inventory_hostname in groups[microk8s_host_workers_group]

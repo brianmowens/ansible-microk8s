@@ -1,0 +1,39 @@
+- name: Ensure snapd is installed (Ubuntu)
+  become: yes
+  apt:
+    name:
+      - snapd
+    update_cache: yes
+    state: present
+  when: ansible_distribution == 'Ubuntu'
+
+- name: Install microk8s snap package
+  become: yes
+  snap:
+    name: microk8s
+    classic: yes
+    channel: "{{ microk8s_version }}"
+
+- name: Wait for Microk8s to be ready
+  become: yes
+  command: microk8s status --wait-ready
+  changed_when: false
+  register: microk8s_status_output
+  failed_when:
+    - "'This MicroK8s deployment is acting as a node in a cluster.' not in microk8s_status_output.stdout_lines"
+    - microk8s_status_output.rc > 0
+
+- name: Create snap alias for kubectl
+  become: yes
+  command: "snap alias microk8s.kubectl kubectl"
+  changed_when: false
+  register: snap_alias_kubectl
+
+- name: Create snap alias for helm3
+  become: yes
+  command: "snap alias microk8s.helm3 helm"
+  changed_when: false
+  register: snap_alias_helm3
+  when:
+    - "'helm3' in microk8s_plugins"
+    - microk8s_plugins.helm3

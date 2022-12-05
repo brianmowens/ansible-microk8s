@@ -1,0 +1,4 @@
+---
+- hosts: microk8s-servers, microk8s-ha-group, microk8s-primary, microk8s-workers
+  roles:
+    - microk8s-server

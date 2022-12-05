@@ -1,0 +1,24 @@
+# Enable or disable each of the MicroK8s plugins
+- name: Register current state of MicroK8s plugins
+  become: yes
+  command:
+    cmd: microk8s status --format yaml
+  changed_when: no
+  register: microk8s_status
+  check_mode: no
+
+- name: Update facts with current MicroK8s plugin states
+  set_fact:
+    microk8s_status: "{{ microk8s_status.stdout | from_yaml }}"
+  
+- name: Enable MicroK8s plugins
+  become: yes
+  loop: "{{ microk8s_status.addons }}"
+  loop_control:
+    label: "{{ item.name }}"
+  command:
+    cmd: microk8s enable {{ item.name }}{% if microk8s_plugins[item.name] != True %}:{{ microk8s_plugins[item.name] }}{% endif %}
+  when:
+    - item.status == 'disabled'
+    - item.name in microk8s_plugins
+    - microk8s_plugins[item.name]

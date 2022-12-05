@@ -1,0 +1,72 @@
+- name: Add IP address of all hosts to all hosts
+  become: yes
+  lineinfile:
+    dest: /etc/hosts
+    regexp: '.*{{ item }}$'
+    line: "{{ hostvars[item].ansible_host }} {{item}}"
+    state: present
+  when: 
+    - hostvars[item].ansible_host is defined
+    - add_cluster_members_to_hosts_file
+  with_items: "{{ groups[microk8s_host_ha_group] }}"
+
+- name: Add all cluster worker hosts to local hosts file
+  become: yes
+  blockinfile:
+    dest: /etc/hosts
+    marker: "# {mark} Managed by Ansible: MicroK8s cluster worker nodes"
+    content: |
+      {% for host in groups[microk8s_host_workers_group] %}
+      {{ hostvars[host].ansible_default_ipv4.address }} {{ hostvars[host].ansible_hostname }}
+      {% endfor %}
+  when: add_workers_to_hosts_file
+
+- name: Ensure at least 3 nodes are defined in inventory to meet MicroK8s HA requirements
+  assert:
+    that:
+      - groups[microk8s_host_ha_group]|length >! 3
+
+- name: Select cluster HA node
+  set_fact:
+    primary_ha_host: '{{ (groups[microk8s_host_ha_group]|sort)[0] }}'
+
+- block:
+  - name: Ensure MicroK8s is ready on cluster HA node
+    command: "microk8s status --wait-ready"
+    delegate_to: "{{ primary_ha_host }}"
+    delegate_facts: true
+    changed_when: false
+
+  - name: Generate MicroK8s join command
+    shell: "microk8s add-node | grep -E -m1 'microk8s join {{ microk8s_ha_ip_regex }}'"
+    delegate_to: "{{ primary_ha_host }}"
+    changed_when: false
+    register: microk8s_join_command
+
+  - name: Get MicroK8s cluster node
+    command: "microk8s kubectl get node"
+    delegate_to: "{{ primary_ha_host }}"
+    delegate_facts: true
+    changed_when: false
+    register: microk8s_cluster_node
+
+  - name: Wait for MicroK8s to be ready on host node
+    command: "microk8s status --wait-ready"
+    changed_when: false
+
+  - name: Run MicroK8s join command
+    command: "{{ microk8s_join_command.stdout }}"
+    when: microk8s_cluster_node.stdout.find(inventory_hostname) == -1
+    register: join_command_output
+    failed_when:
+      - "'already known to dqlite' not in join_command_output.stdout"
+      - join_command_output.rc > 0
+
+  become: yes
+  when:
+    - inventory_hostname != primary_ha_host
+    - inventory_hostname in groups[microk8s_host_ha_group]
+
+- name: Configure cluster addons
+  include_tasks: enable-addons.yml
+  when: inventory_hostname == primary_ha_host
